@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "SomaGPT — Learn without limits",
+  "short_name": "SomaGPT",
+  "description": "An accessible learning companion for students and educators across East Africa.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fafbf8",
+  "theme_color": "#123d32",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
