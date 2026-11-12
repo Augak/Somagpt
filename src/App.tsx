@@ -30,6 +30,7 @@ export default function App() {
   const [toolOpen, setToolOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const active = chats.find(c => c.id === activeId) || null;
@@ -48,7 +49,11 @@ export default function App() {
       setChats(prev => [chat,...prev]); setActiveId(chat.id);
     }
     setDraft(''); setFile(null); setToolOpen(false); if (fileRef.current) fileRef.current.value = '';
-    setNotice('Message saved locally. AI responses will be enabled when the AI service is connected.');
+    setIsGenerating(true);
+    window.setTimeout(() => {
+      setIsGenerating(false);
+      setNotice('Your message is saved. Connect the lesson-generation API to receive a personalized AI response.');
+    }, 1100);
   }
   function prompt(value: string) { setDraft(value); setMobileNav(false); window.setTimeout(() => textRef.current?.focus(), 0); }
   function removeChat(id: string) { setChats(prev => prev.filter(c => c.id !== id)); if (activeId === id) setActiveId(null); }
@@ -83,7 +88,7 @@ export default function App() {
       </header>
       <section className={'chat-stage' + (active ? ' has-chat' : '')}>
         {!active ? <div className="welcome">
-          <div className="hero-art"><div className="orbit orbit-a"/><div className="orbit orbit-b"/><div className="hero-core"><span/><i/><b/></div><i className="sparkle s1">✦</i><i className="sparkle s2">✧</i><i className="sparkle s3">✦</i></div>
+          <div className="hero-art"><img className="hero-photo" src="https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=160&q=80" alt="Students learning together" loading="lazy"/><div className="orbit orbit-a"/><div className="orbit orbit-b"/><div className="hero-core"><span/><i/><b/></div><i className="sparkle s1">✦</i><i className="sparkle s2">✧</i><i className="sparkle s3">✦</i></div>
           <div className="eyebrow"><Sparkles size={13}/> YOUR AI LEARNING COMPANION</div>
           <h1>Curiosity starts<br/><em>with a question.</em></h1>
           <p className="welcome-copy">Learn at your pace. Ask anything, understand difficult ideas and make progress with a little help from SomaGPT.</p>
@@ -101,6 +106,7 @@ export default function App() {
       </div>
       <footer className="workspace-footer"><span>Made for learners across East Africa</span><span><ShieldCheck size={12}/> Your learning space</span></footer>
     </main>
+    {isGenerating && <div className="lesson-loader" role="status" aria-live="polite"><div className="loader-mark"><span/><span/><span/></div><strong>Generating your personalized lesson</strong><small>Preparing your learning space…</small></div>}
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
     {settingsOpen && <div className="modal-shade" onClick={() => setSettingsOpen(false)}><section className="settings-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>PREFERENCES</small><h2>Settings</h2></div><button className="icon-btn" onClick={() => setSettingsOpen(false)}><X size={18}/></button></div><div className="setting-row"><span><strong>Appearance</strong><small>Choose a comfortable reading theme</small></span><button onClick={() => setDark(v => !v)}>{dark ? 'Dark' : 'Light'} <ChevronDown size={13}/></button></div><div className="setting-row"><span><strong>Language</strong><small>Interface language</small></span><b>English</b></div><div className="setting-row"><span><strong>Conversation storage</strong><small>Saved in this browser</small></span><b>Local</b></div><p className="settings-note"><ShieldCheck size={14}/> Account sync and advanced privacy controls will arrive with backend integration.</p></section></div>}
   </div>;
