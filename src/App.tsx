@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 import { ArrowUp, BookOpen, Brain, Check, ChevronDown, Clock3, FileText, GraduationCap, Languages, Menu, MessageSquare, Moon, MoreHorizontal, NotebookPen, Paperclip, Plus, Search, Settings2, ShieldCheck, Sparkles, Sun, X, LibraryBig, Calculator, Lightbulb, Trash2 } from 'lucide-react';
@@ -112,7 +113,7 @@ export default function App() {
     }
     setDraft(''); setFile(null); setToolOpen(false); if (fileRef.current) fileRef.current.value = '';
   }
-  async function submitAuth(e: React.FormEvent) {
+  async function submitAuth(e: FormEvent) {
     e.preventDefault(); setAuthBusy(true);
     try {
       const result = authMode === 'signup'
@@ -146,7 +147,7 @@ export default function App() {
       <div className="sidebar-bottom">
         <div className="plan-card"><span className="plan-icon"><GraduationCap size={18}/></span><span><strong>Free plan</strong><small>Learning starts here</small></span><ChevronDown size={14}/></div>
         <button className="side-link" onClick={() => setSettingsOpen(true)}><Settings2 size={17}/><span>Settings</span></button>
-        <div className="profile-row"><span className="profile-avatar">S</span><span><strong>Student</strong><small>Personal workspace</small></span></div>
+        <div className="profile-row"><span className="profile-avatar">S</span><span><strong>{user?.email || 'Student'}</strong><small>{user ? 'Synced account' : 'Personal workspace'}</small></span></div>
       </div>
     </aside>
     {mobileNav && <button className="nav-scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation"/>}
@@ -163,7 +164,7 @@ export default function App() {
           <p className="welcome-copy">Learn at your pace. Ask anything, understand difficult ideas and make progress with a little help from SomaGPT.</p>
           <div className="starter-grid">{starters.map(({icon:Icon,title,detail,prompt:p}) => <button className="starter-card" key={title} onClick={() => prompt(p)}><span className="starter-icon"><Icon size={18}/></span><span className="starter-text"><strong>{title}</strong><small>{detail}</small></span><ArrowUp className="starter-arrow" size={15}/></button>)}</div>
           <div className="quick-tools"><span>TRY A TOOL</span>{tools.map(({icon:Icon,label,prompt:p}) => <button key={label} onClick={() => prompt(p)}><Icon size={14}/>{label}</button>)}</div>
-        </div> : <div className="conversation">{active.messages.map(m => <article className={'message-row ' + m.role} key={m.id}><span className={m.role === 'assistant' ? 'assistant-avatar' : 'user-avatar'}>{m.role === 'assistant' ? 'S' : 'U'}</span><div className="message-content"><div className="message-meta"><strong>{m.role === 'assistant' ? 'SomaGPT' : 'You'}</strong><time>{new Date(m.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.text}</p></div></article>)}<div className="backend-note"><Sparkles size={15}/><div><strong>Your message is saved.</strong><span>The AI response service is not connected yet. Your message is stored locally in this browser until backend integration is complete.</span></div></div></div>}
+        </div> : <div className="conversation">{active.messages.map(m => <article className={'message-row ' + m.role} key={m.id}><span className={m.role === 'assistant' ? 'assistant-avatar' : 'user-avatar'}>{m.role === 'assistant' ? 'S' : 'U'}</span><div className="message-content"><div className="message-meta"><strong>{m.role === 'assistant' ? 'SomaGPT' : 'You'}</strong><time>{new Date(m.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.text}</p></div></article>)}<div className="backend-note"><Sparkles size={15}/><div><strong>Your message is saved.</strong><span>Sign in to sync conversations across devices. AI lesson generation is the next integration.</span></div></div></div>}
       </section>
       <div className="composer-wrap">
         <div className="composer">
@@ -175,9 +176,9 @@ export default function App() {
       </div>
       <footer className="workspace-footer"><span>Made for learners across East Africa</span><span><ShieldCheck size={12}/> Your learning space</span></footer>
     </main>
-    {isGenerating && <div className="lesson-loader" role="status" aria-live="polite"><div className="loader-mark"><span/><span/><span/></div><strong>Generating your personalized lesson</strong><small>Preparing your learning space…</small></div>}
+    {isGenerating && <div className="lesson-loader" role="status" aria-live="polite"><div className="loader-mark"><span/><span/><span/></div><strong>Saving your conversation</strong><small>Syncing securely to your account…</small></div>}
     {authOpen && <div className="modal-shade" onClick={() => setAuthOpen(false)}><section className="settings-modal auth-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>SOMAGPT ACCOUNT</small><h2>{authMode === 'signin' ? 'Welcome back' : 'Create your account'}</h2></div><button className="icon-btn" onClick={() => setAuthOpen(false)}><X size={18}/></button></div><p className="auth-intro">Save your learning conversations and access them across your devices.</p><form onSubmit={submitAuth} className="auth-form"><label>Email address<input type="email" required autoComplete="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com"/></label><label>Password<input type="password" required minLength={8} autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters"/></label><button className="auth-submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'signin' ? 'Sign in' : 'Create account'}</button></form><button className="auth-switch" onClick={() => setAuthMode(mode => mode === 'signin' ? 'signup' : 'signin')}>{authMode === 'signin' ? 'New to SomaGPT? Create an account' : 'Already have an account? Sign in'}</button><p className="auth-footnote">Email confirmation may be required by account settings.</p></section></div>}
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
-    {settingsOpen && <div className="modal-shade" onClick={() => setSettingsOpen(false)}><section className="settings-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>PREFERENCES</small><h2>Settings</h2></div><button className="icon-btn" onClick={() => setSettingsOpen(false)}><X size={18}/></button></div><div className="setting-row"><span><strong>Appearance</strong><small>Choose a comfortable reading theme</small></span><button onClick={() => setDark(v => !v)}>{dark ? 'Dark' : 'Light'} <ChevronDown size={13}/></button></div><div className="setting-row"><span><strong>Language</strong><small>Interface language</small></span><b>English</b></div><div className="setting-row"><span><strong>Conversation storage</strong><small>Saved in this browser</small></span><b>Local</b></div><p className="settings-note"><ShieldCheck size={14}/> Account sync and advanced privacy controls will arrive with backend integration.</p></section></div>}
+    {settingsOpen && <div className="modal-shade" onClick={() => setSettingsOpen(false)}><section className="settings-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>PREFERENCES</small><h2>Settings</h2></div><button className="icon-btn" onClick={() => setSettingsOpen(false)}><X size={18}/></button></div><div className="setting-row"><span><strong>Appearance</strong><small>Choose a comfortable reading theme</small></span><button onClick={() => setDark(v => !v)}>{dark ? 'Dark' : 'Light'} <ChevronDown size={13}/></button></div><div className="setting-row"><span><strong>Language</strong><small>Interface language</small></span><b>English</b></div><div className="setting-row"><span><strong>Conversation storage</strong><small>Saved in this browser</small></span><b>Local</b></div><p className="settings-note"><ShieldCheck size={14}/> Your conversations are protected by database Row Level Security.</p></section></div>}
   </div>;
 }
