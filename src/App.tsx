@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase';
 import { ArrowUp, BookOpen, Brain, Check, ChevronDown, Clock3, FileText, GraduationCap, Languages, Menu, MessageSquare, Moon, MoreHorizontal, NotebookPen, Paperclip, Plus, Search, Settings2, ShieldCheck, Sparkles, Sun, X, LibraryBig, Calculator, Lightbulb, Trash2 } from 'lucide-react';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; time: number };
@@ -30,30 +32,97 @@ export default function App() {
   const [toolOpen, setToolOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState('');
+  const [user, setUser] = useState<User | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const active = chats.find(c => c.id === activeId) || null;
   useEffect(() => { localStorage.setItem('somagpt-chats', JSON.stringify(chats)); }, [chats]);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from('conversations')
+        .select('id,title,updated_at,messages(id,role,content,created_at)')
+        .order('updated_at', { ascending: false });
+      if (error) { setNotice('Could not load cloud conversations: ' + error.message); return; }
+      if (cancelled) return;
+      const remote: Conversation[] = (data || []).map((row: any) => ({
+        id: row.id, title: row.title, updatedAt: new Date(row.updated_at).getTime(),
+        messages: (row.messages || []).sort((a: any,b: any) => new Date(a.created_at).getTime()-new Date(b.created_at).getTime()).map((m: any) => ({
+          id: m.id, role: m.role === 'assistant' ? 'assistant' : 'user', text: m.content, time: new Date(m.created_at).getTime()
+        }))
+      }));
+      setChats(remote);
+      setActiveId(null);
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
   useEffect(() => { if (!notice) return; const t = window.setTimeout(() => setNotice(''), 3500); return () => window.clearTimeout(t); }, [notice]);
   const visibleChats = useMemo(() => chats.filter(c => c.title.toLowerCase().includes(query.toLowerCase()) || c.messages.some(m => m.text.toLowerCase().includes(query.toLowerCase()))).sort((a,b) => b.updatedAt-a.updatedAt), [chats,query]);
 
   function newChat() { setActiveId(null); setDraft(''); setFile(null); setMobileNav(false); }
-  function send(value = draft) {
-    if (!value.trim() && !file) return;
+  async function send(value = draft) {
+    if ((!value.trim() && !file) || isGenerating) return;
     const now = Date.now();
-    const message: Message = { id: makeId(), role: 'user', text: [value.trim(), file ? 'Attached file: ' + file.name : ''].filter(Boolean).join('\n'), time: now };
-    if (active) setChats(prev => prev.map(c => c.id === active.id ? { ...c, messages: [...c.messages,message], updatedAt: now } : c));
-    else {
-      const chat = { id: makeId(), title: (value.trim() || file?.name || 'New conversation').slice(0,48), messages: [message], updatedAt: now };
-      setChats(prev => [chat,...prev]); setActiveId(chat.id);
+    const content = [value.trim(), file ? 'Attached file: ' + file.name : ''].filter(Boolean).join('\\n');
+    const message: Message = { id: makeId(), role: 'user', text: content, time: now };
+    let conversationId = active?.id || null;
+    if (user) {
+      setIsGenerating(true);
+      try {
+        if (!conversationId) {
+          const { data, error } = await supabase.from('conversations')
+            .insert({ user_id: user.id, title: (value.trim() || file?.name || 'New conversation').slice(0,48) })
+            .select('id').single();
+          if (error) throw error;
+          conversationId = data.id;
+        }
+        const { error } = await supabase.from('messages').insert({
+          conversation_id: conversationId, user_id: user.id, role: 'user', content,
+          attachment_metadata: file ? [{ name: file.name, size: file.size, type: file.type }] : []
+        });
+        if (error) throw error;
+        if (active) setChats(prev => prev.map(chat => chat.id === conversationId ? { ...chat, messages: [...chat.messages,message], updatedAt: now } : chat));
+        else {
+          const chat = { id: conversationId!, title: (value.trim() || file?.name || 'New conversation').slice(0,48), messages: [message], updatedAt: now };
+          setChats(prev => [chat,...prev]); setActiveId(conversationId);
+        }
+        setNotice('Message saved to your SomaGPT account.');
+      } catch (error: any) {
+        setNotice('Could not save to your account: ' + (error?.message || 'Please try again.'));
+      } finally { setIsGenerating(false); }
+    } else {
+      if (active) setChats(prev => prev.map(chat => chat.id === active.id ? { ...chat, messages: [...chat.messages,message], updatedAt: now } : chat));
+      else {
+        const chat = { id: makeId(), title: (value.trim() || file?.name || 'New conversation').slice(0,48), messages: [message], updatedAt: now };
+        setChats(prev => [chat,...prev]); setActiveId(chat.id);
+      }
+      setNotice('Message saved in this browser. Sign in to sync across devices.');
     }
     setDraft(''); setFile(null); setToolOpen(false); if (fileRef.current) fileRef.current.value = '';
-    setIsGenerating(true);
-    window.setTimeout(() => {
-      setIsGenerating(false);
-      setNotice('Your message is saved. Connect the lesson-generation API to receive a personalized AI response.');
-    }, 1100);
+  }
+  async function submitAuth(e: React.FormEvent) {
+    e.preventDefault(); setAuthBusy(true);
+    try {
+      const result = authMode === 'signup'
+        ? await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword })
+        : await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+      if (result.error) throw result.error;
+      if (authMode === 'signup' && !result.data.session) setNotice('Check your email to confirm your SomaGPT account, then sign in.');
+      else { setNotice('You are signed in. Syncing your conversations.'); setAuthOpen(false); }
+    } catch (error: any) { setNotice(error?.message || 'Authentication failed.'); }
+    finally { setAuthBusy(false); }
   }
   function prompt(value: string) { setDraft(value); setMobileNav(false); window.setTimeout(() => textRef.current?.focus(), 0); }
   function removeChat(id: string) { setChats(prev => prev.filter(c => c.id !== id)); if (activeId === id) setActiveId(null); }
@@ -107,6 +176,7 @@ export default function App() {
       <footer className="workspace-footer"><span>Made for learners across East Africa</span><span><ShieldCheck size={12}/> Your learning space</span></footer>
     </main>
     {isGenerating && <div className="lesson-loader" role="status" aria-live="polite"><div className="loader-mark"><span/><span/><span/></div><strong>Generating your personalized lesson</strong><small>Preparing your learning space…</small></div>}
+    {authOpen && <div className="modal-shade" onClick={() => setAuthOpen(false)}><section className="settings-modal auth-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>SOMAGPT ACCOUNT</small><h2>{authMode === 'signin' ? 'Welcome back' : 'Create your account'}</h2></div><button className="icon-btn" onClick={() => setAuthOpen(false)}><X size={18}/></button></div><p className="auth-intro">Save your learning conversations and access them across your devices.</p><form onSubmit={submitAuth} className="auth-form"><label>Email address<input type="email" required autoComplete="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com"/></label><label>Password<input type="password" required minLength={8} autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters"/></label><button className="auth-submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'signin' ? 'Sign in' : 'Create account'}</button></form><button className="auth-switch" onClick={() => setAuthMode(mode => mode === 'signin' ? 'signup' : 'signin')}>{authMode === 'signin' ? 'New to SomaGPT? Create an account' : 'Already have an account? Sign in'}</button><p className="auth-footnote">Email confirmation may be required by account settings.</p></section></div>}
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
     {settingsOpen && <div className="modal-shade" onClick={() => setSettingsOpen(false)}><section className="settings-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>PREFERENCES</small><h2>Settings</h2></div><button className="icon-btn" onClick={() => setSettingsOpen(false)}><X size={18}/></button></div><div className="setting-row"><span><strong>Appearance</strong><small>Choose a comfortable reading theme</small></span><button onClick={() => setDark(v => !v)}>{dark ? 'Dark' : 'Light'} <ChevronDown size={13}/></button></div><div className="setting-row"><span><strong>Language</strong><small>Interface language</small></span><b>English</b></div><div className="setting-row"><span><strong>Conversation storage</strong><small>Saved in this browser</small></span><b>Local</b></div><p className="settings-note"><ShieldCheck size={14}/> Account sync and advanced privacy controls will arrive with backend integration.</p></section></div>}
   </div>;
