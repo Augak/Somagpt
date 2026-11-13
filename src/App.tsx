@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
+import { mergeConversationSources, readLocalConversations, writeLocalConversations } from './lib/conversation-storage';
 import { ArrowUp, BookOpen, Brain, Check, ChevronDown, Clock3, FileText, GraduationCap, Languages, Menu, MessageSquare, Moon, MoreHorizontal, NotebookPen, Paperclip, Plus, Search, Settings2, ShieldCheck, Sparkles, Sun, X, LibraryBig, Calculator, Lightbulb, Trash2 } from 'lucide-react';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; time: number };
-type Conversation = { id: string; title: string; messages: Message[]; updatedAt: number };
+type Conversation = { id: string; title: string; messages: Message[]; updatedAt: number; storage?: 'local' | 'cloud' };
 const starters = [
   { icon: Brain, title: 'Explain a difficult topic', detail: 'Break it down into simple steps', prompt: 'Explain a difficult topic to me in simple steps.' },
   { icon: FileText, title: 'Solve an exam question', detail: 'Work through it with explanations', prompt: 'Help me solve an exam question step by step.' },
@@ -21,7 +22,7 @@ const tools = [
 const makeId = () => Math.random().toString(36).slice(2, 10);
 
 export default function App() {
-  const [chats, setChats] = useState<Conversation[]>(() => { try { return JSON.parse(localStorage.getItem('somagpt-chats') || '[]'); } catch { return []; } });
+  const [chats, setChats] = useState<Conversation[]>(() => readLocalConversations(localStorage));
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -43,13 +44,16 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const active = chats.find(c => c.id === activeId) || null;
-  useEffect(() => { localStorage.setItem('somagpt-chats', JSON.stringify(chats)); }, [chats]);
+  useEffect(() => { writeLocalConversations(localStorage, chats); }, [chats]);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
     return () => listener.subscription.unsubscribe();
   }, []);
   useEffect(() => {
+    // Clear the previous account's in-memory conversations before loading another account.
+    setChats(readLocalConversations(localStorage));
+    setActiveId(null);
     if (!user) return;
     let cancelled = false;
     (async () => {
@@ -59,13 +63,12 @@ export default function App() {
       if (error) { setNotice('Could not load cloud conversations: ' + error.message); return; }
       if (cancelled) return;
       const remote: Conversation[] = (data || []).map((row: any) => ({
-        id: row.id, title: row.title, updatedAt: new Date(row.updated_at).getTime(),
+        id: row.id, title: row.title, updatedAt: new Date(row.updated_at).getTime(), storage: 'cloud',
         messages: (row.messages || []).sort((a: any,b: any) => new Date(a.created_at).getTime()-new Date(b.created_at).getTime()).map((m: any) => ({
           id: m.id, role: m.role === 'assistant' ? 'assistant' : 'user', text: m.content, time: new Date(m.created_at).getTime()
         }))
       }));
-      setChats(remote);
-      setActiveId(null);
+      setChats(mergeConversationSources(readLocalConversations(localStorage), remote));
     })();
     return () => { cancelled = true; };
   }, [user]);
@@ -79,24 +82,31 @@ export default function App() {
     const content = [value.trim(), file ? 'Attached file: ' + file.name : ''].filter(Boolean).join('\\n');
     const message: Message = { id: makeId(), role: 'user', text: content, time: now };
     let conversationId = active?.id || null;
-    if (user) {
+    const saveToAccount = Boolean(user && (!active || active.storage === 'cloud'));
+    if (saveToAccount) {
       setIsGenerating(true);
       try {
         if (!conversationId) {
           const { data, error } = await supabase.from('conversations')
-            .insert({ user_id: user.id, title: (value.trim() || file?.name || 'New conversation').slice(0,48) })
+            .insert({ user_id: user!.id, title: (value.trim() || file?.name || 'New conversation').slice(0,48) })
             .select('id').single();
           if (error) throw error;
           conversationId = data.id;
         }
         const { error } = await supabase.from('messages').insert({
-          conversation_id: conversationId, user_id: user.id, role: 'user', content,
+          conversation_id: conversationId, user_id: user!.id, role: 'user', content,
           attachment_metadata: file ? [{ name: file.name, size: file.size, type: file.type }] : []
         });
         if (error) throw error;
-        if (active) setChats(prev => prev.map(chat => chat.id === conversationId ? { ...chat, messages: [...chat.messages,message], updatedAt: now } : chat));
-        else {
-          const chat = { id: conversationId!, title: (value.trim() || file?.name || 'New conversation').slice(0,48), messages: [message], updatedAt: now };
+        if (active) {
+          setChats(prev => prev.map(chat => chat.id === conversationId
+            ? { ...chat, storage: 'cloud', messages: [...chat.messages,message], updatedAt: now }
+            : chat));
+        } else {
+          const chat: Conversation = {
+            id: conversationId!, title: (value.trim() || file?.name || 'New conversation').slice(0,48),
+            messages: [message], updatedAt: now, storage: 'cloud'
+          };
           setChats(prev => [chat,...prev]); setActiveId(conversationId);
         }
         setNotice('Message saved to your SomaGPT account.');
@@ -104,12 +114,17 @@ export default function App() {
         setNotice('Could not save to your account: ' + (error?.message || 'Please try again.'));
       } finally { setIsGenerating(false); }
     } else {
-      if (active) setChats(prev => prev.map(chat => chat.id === active.id ? { ...chat, messages: [...chat.messages,message], updatedAt: now } : chat));
+      if (active) setChats(prev => prev.map(chat => chat.id === active.id ? { ...chat, messages: [...chat.messages,message], updatedAt: now, storage: 'local' } : chat));
       else {
-        const chat = { id: makeId(), title: (value.trim() || file?.name || 'New conversation').slice(0,48), messages: [message], updatedAt: now };
+        const chat: Conversation = {
+          id: makeId(), title: (value.trim() || file?.name || 'New conversation').slice(0,48),
+          messages: [message], updatedAt: now, storage: 'local'
+        };
         setChats(prev => [chat,...prev]); setActiveId(chat.id);
       }
-      setNotice('Message saved in this browser. Sign in to sync across devices.');
+      setNotice(user
+        ? 'This conversation stays on this device. Start a new chat to save messages to your account.'
+        : 'Message saved in this browser. Sign in to sync new conversations across devices.');
     }
     setDraft(''); setFile(null); setToolOpen(false); if (fileRef.current) fileRef.current.value = '';
   }
@@ -126,7 +141,15 @@ export default function App() {
     finally { setAuthBusy(false); }
   }
   function prompt(value: string) { setDraft(value); setMobileNav(false); window.setTimeout(() => textRef.current?.focus(), 0); }
-  function removeChat(id: string) { setChats(prev => prev.filter(c => c.id !== id)); if (activeId === id) setActiveId(null); }
+  async function removeChat(id: string) {
+    const target = chats.find(chat => chat.id === id);
+    if (target?.storage === 'cloud' && user) {
+      const { error } = await supabase.from('conversations').delete().eq('id', id);
+      if (error) { setNotice('Could not delete this account conversation: ' + error.message); return; }
+    }
+    setChats(prev => prev.filter(chat => chat.id !== id));
+    if (activeId === id) setActiveId(null);
+  }
 
   return <div className={'app-shell' + (dark ? ' theme-dark' : '')}>
     <aside className={'sidebar' + (mobileNav ? ' sidebar-open' : '') + (collapsed ? ' sidebar-collapsed' : '')}>
@@ -164,7 +187,7 @@ export default function App() {
           <p className="welcome-copy">Learn at your pace. Ask anything, understand difficult ideas and make progress with a little help from SomaGPT.</p>
           <div className="starter-grid">{starters.map(({icon:Icon,title,detail,prompt:p}) => <button className="starter-card" key={title} onClick={() => prompt(p)}><span className="starter-icon"><Icon size={18}/></span><span className="starter-text"><strong>{title}</strong><small>{detail}</small></span><ArrowUp className="starter-arrow" size={15}/></button>)}</div>
           <div className="quick-tools"><span>TRY A TOOL</span>{tools.map(({icon:Icon,label,prompt:p}) => <button key={label} onClick={() => prompt(p)}><Icon size={14}/>{label}</button>)}</div>
-        </div> : <div className="conversation">{active.messages.map(m => <article className={'message-row ' + m.role} key={m.id}><span className={m.role === 'assistant' ? 'assistant-avatar' : 'user-avatar'}>{m.role === 'assistant' ? 'S' : 'U'}</span><div className="message-content"><div className="message-meta"><strong>{m.role === 'assistant' ? 'SomaGPT' : 'You'}</strong><time>{new Date(m.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.text}</p></div></article>)}<div className="backend-note"><Sparkles size={15}/><div><strong>Your message is saved.</strong><span>Sign in to sync conversations across devices. AI lesson generation is the next integration.</span></div></div></div>}
+        </div> : <div className="conversation">{active.messages.map(m => <article className={'message-row ' + m.role} key={m.id}><span className={m.role === 'assistant' ? 'assistant-avatar' : 'user-avatar'}>{m.role === 'assistant' ? 'S' : 'U'}</span><div className="message-content"><div className="message-meta"><strong>{m.role === 'assistant' ? 'SomaGPT' : 'You'}</strong><time>{new Date(m.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.text}</p></div></article>)}<div className="backend-note"><Sparkles size={15}/><div><strong>Your message is saved.</strong><span>{active.storage === 'cloud' ? 'This conversation is saved to your account. AI lesson generation is the next integration.' : user ? 'This is a device-only conversation. Start a new chat to save new messages to your account.' : 'This conversation is saved in this browser. Sign in to sync new conversations across devices.'}</span></div></div></div>}
       </section>
       <div className="composer-wrap">
         <div className="composer">
@@ -179,6 +202,6 @@ export default function App() {
     {isGenerating && <div className="lesson-loader" role="status" aria-live="polite"><div className="loader-mark"><span/><span/><span/></div><strong>Saving your conversation</strong><small>Syncing securely to your account…</small></div>}
     {authOpen && <div className="modal-shade" onClick={() => setAuthOpen(false)}><section className="settings-modal auth-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>SOMAGPT ACCOUNT</small><h2>{authMode === 'signin' ? 'Welcome back' : 'Create your account'}</h2></div><button className="icon-btn" onClick={() => setAuthOpen(false)}><X size={18}/></button></div><p className="auth-intro">Save your learning conversations and access them across your devices.</p><form onSubmit={submitAuth} className="auth-form"><label>Email address<input type="email" required autoComplete="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com"/></label><label>Password<input type="password" required minLength={8} autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters"/></label><button className="auth-submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'signin' ? 'Sign in' : 'Create account'}</button></form><button className="auth-switch" onClick={() => setAuthMode(mode => mode === 'signin' ? 'signup' : 'signin')}>{authMode === 'signin' ? 'New to SomaGPT? Create an account' : 'Already have an account? Sign in'}</button><p className="auth-footnote">Email confirmation may be required by account settings.</p></section></div>}
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
-    {settingsOpen && <div className="modal-shade" onClick={() => setSettingsOpen(false)}><section className="settings-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>PREFERENCES</small><h2>Settings</h2></div><button className="icon-btn" onClick={() => setSettingsOpen(false)}><X size={18}/></button></div><div className="setting-row"><span><strong>Appearance</strong><small>Choose a comfortable reading theme</small></span><button onClick={() => setDark(v => !v)}>{dark ? 'Dark' : 'Light'} <ChevronDown size={13}/></button></div><div className="setting-row"><span><strong>Language</strong><small>Interface language</small></span><b>English</b></div><div className="setting-row"><span><strong>Conversation storage</strong><small>Saved in this browser</small></span><b>Local</b></div><p className="settings-note"><ShieldCheck size={14}/> Your conversations are protected by database Row Level Security.</p></section></div>}
+    {settingsOpen && <div className="modal-shade" onClick={() => setSettingsOpen(false)}><section className="settings-modal" onClick={e => e.stopPropagation()}><div className="modal-head"><div><small>PREFERENCES</small><h2>Settings</h2></div><button className="icon-btn" onClick={() => setSettingsOpen(false)}><X size={18}/></button></div><div className="setting-row"><span><strong>Appearance</strong><small>Choose a comfortable reading theme</small></span><button onClick={() => setDark(v => !v)}>{dark ? 'Dark' : 'Light'} <ChevronDown size={13}/></button></div><div className="setting-row"><span><strong>Language</strong><small>Interface language</small></span><b>English</b></div><div className="setting-row"><span><strong>Conversation storage</strong><small>Device-only chats stay local; signed-in chats stay in your account</small></span><b>Separate</b></div><p className="settings-note"><ShieldCheck size={14}/> Your conversations are protected by database Row Level Security.</p></section></div>}
   </div>;
 }
