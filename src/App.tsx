@@ -44,7 +44,11 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const active = chats.find(c => c.id === activeId) || null;
-  useEffect(() => { writeLocalConversations(localStorage, chats); }, [chats]);
+  useEffect(() => {
+    if (!writeLocalConversations(localStorage, chats)) {
+      setNotice('Browser storage is full or unavailable. This session may not persist after closing the tab.');
+    }
+  }, [chats]);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
